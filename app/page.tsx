@@ -1,26 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { allQuestions, BaseQuestion, Domain, domainMeta, EXAM_ORDER, ExamConfig, examConfigs, ExamId, finalCramQuestions, questions, researchSources } from "./question-bank";
 import { NarrationPlayer } from "./narration-player";
 import { rationaleNarrationClips, requestNarrationClip } from "./narration";
+import {
+  AnswerValue,
+  applyProgressBackup,
+  AttemptSummary,
+  buildProgressBackup,
+  CsvRestoreResult,
+  HISTORY_CAP,
+  mergeAttemptHistory,
+  Mode,
+  parseAndValidateBackup,
+  parseSessionCsv,
+  PROGRESS_IMPORTED_EVENT,
+  ProgressBackupV1,
+  SessionDuty,
+  SessionSize,
+  validQuestionOrder,
+} from "./progress-backup";
 
-type AnswerValue = number | number[] | string | string[] | null;
 type Screen = "start" | "exam" | "results";
-type Mode = "exam" | "study";
-type SessionSize = 20 | 60 | 75 | 115 | 300;
-type SessionDuty = "all" | Domain;
-type AttemptSummary = {
-  id: string;
-  completedAt: string;
-  mode: Mode;
-  questions: number;
-  answered: number;
-  correct: number;
-  percent: number;
-  duty: SessionDuty;
-  examId?: ExamId;
-};
 
 const STORAGE_KEY = "aureum-study-hall-cts-session-v1";
 const HISTORY_KEY = "aureum-study-hall-cts-history-v1";
@@ -85,14 +87,6 @@ function shuffledIds(source: number[], random = Math.random) {
     [ids[index], ids[randomIndex]] = [ids[randomIndex], ids[index]];
   }
   return ids;
-}
-
-function validQuestionOrder(value: unknown, lookup: Map<number, BaseQuestion> = questionById, maxLen = allQuestions.length): value is number[] {
-  return Array.isArray(value)
-    && value.length > 0
-    && value.length <= maxLen
-    && new Set(value).size === value.length
-    && value.every((id) => typeof id === "number" && lookup.has(id));
 }
 
 function examSeconds(questionCount: number) {
@@ -517,6 +511,10 @@ export default function Home() {
   const [sessionSeed, setSessionSeed] = useState("");
   const [attemptStartedAt, setAttemptStartedAt] = useState("");
   const [history, setHistory] = useState<AttemptSummary[]>([]);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [progressNotice, setProgressNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [pendingBackup, setPendingBackup] = useState<{ backup: ProgressBackupV1; conflicts: ExamId[] } | null>(null);
+  const [importedCsvSession, setImportedCsvSession] = useState<CsvRestoreResult | null>(null);
 
   const orderedQuestions = useMemo(() => questionIds.map((id) => activeQuestionById.get(id)).filter((item): item is BaseQuestion => Boolean(item)), [questionIds, activeQuestionById]);
   const question = orderedQuestions[currentIndex] ?? activeExam.questions[0] ?? questions[0];
@@ -528,20 +526,24 @@ export default function Home() {
     if (metaTheme) metaTheme.setAttribute("content", activeExam.themeColorHex);
   }, [activeExam]);
 
-  useEffect(() => {
-    if (screen !== "start") return;
+  const syncLocalRecord = useCallback((storageKey = activeStorageKey, historyKey = activeHistoryKey, lookup = activeQuestionById, maxLen = activeExam.allQuestions.length) => {
     setHasSaved(false);
     setHistory([]);
     try {
-      const saved = localStorage.getItem(activeStorageKey);
+      const saved = localStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (validQuestionOrder(parsed.questionIds, activeQuestionById, activeExam.allQuestions.length)) setHasSaved(true);
+        if (validQuestionOrder(parsed.questionIds, lookup, maxLen)) setHasSaved(true);
       }
-      const savedHistory = JSON.parse(localStorage.getItem(activeHistoryKey) ?? "[]");
-      if (Array.isArray(savedHistory)) setHistory(savedHistory.slice(0, 12));
+      const savedHistory = JSON.parse(localStorage.getItem(historyKey) ?? "[]");
+      if (Array.isArray(savedHistory)) setHistory(savedHistory.slice(0, HISTORY_CAP));
     } catch {}
-  }, [screen, activeStorageKey, activeHistoryKey, activeQuestionById, activeExam.allQuestions.length]);
+  }, [activeStorageKey, activeHistoryKey, activeQuestionById, activeExam.allQuestions.length]);
+
+  useEffect(() => {
+    if (screen !== "start") return;
+    syncLocalRecord();
+  }, [screen, syncLocalRecord]);
 
   function selectExam(nextExam: ExamId) {
     setSelectedExam(nextExam);
@@ -649,7 +651,7 @@ export default function Home() {
     };
     setHistory((current) => {
       if (current.some((attempt) => attempt.id === summary.id)) return current;
-      const next = [summary, ...current].slice(0, 12);
+      const next = [summary, ...current].slice(0, HISTORY_CAP);
       safeSetStorage(activeHistoryKey, JSON.stringify(next));
       return next;
     });
@@ -769,6 +771,121 @@ export default function Home() {
     window.setTimeout(() => window.print(), 50);
   }
 
+  function exportProgress() {
+    try {
+      const backup = buildProgressBackup(localStorage);
+      const totalAttempts = EXAM_ORDER.reduce((sum, id) => sum + backup.exams[id].history.length, 0);
+      const activeCount = EXAM_ORDER.filter((id) => Boolean(backup.exams[id].activeSession)).length;
+      const url = URL.createObjectURL(new Blob([`${JSON.stringify(backup, null, 2)}\n`], { type: "application/json;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `aureum-study-hall-progress-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setPendingBackup(null);
+      setImportedCsvSession(null);
+      setProgressNotice({
+        tone: "ok",
+        text: `Exported portable backup (${totalAttempts} saved attempt${totalAttempts === 1 ? "" : "s"}, ${activeCount} active session${activeCount === 1 ? "" : "s"}).`,
+      });
+    } catch {
+      setProgressNotice({ tone: "error", text: "Unable to read local browser storage for export." });
+    }
+  }
+
+  async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setPendingBackup(null);
+    setImportedCsvSession(null);
+
+    try {
+      const text = await file.text();
+      const trimmed = text.trim();
+      const isCsv = file.name.toLowerCase().endsWith(".csv") || (!trimmed.startsWith("{") && trimmed.toLowerCase().includes("question id"));
+
+      if (isCsv) {
+        const parsedCsv = parseSessionCsv(text, file.name);
+        if (!parsedCsv.ok) {
+          setProgressNotice({ tone: "error", text: parsedCsv.error });
+          return;
+        }
+        const { result } = parsedCsv;
+        const targetConfig = examConfigs[result.examId];
+        const existingRaw = JSON.parse(localStorage.getItem(targetConfig.historyKey) ?? "[]");
+        const existingList: AttemptSummary[] = Array.isArray(existingRaw) ? existingRaw : [];
+        const { merged, added } = mergeAttemptHistory(existingList, [result.summary]);
+        safeSetStorage(targetConfig.historyKey, JSON.stringify(merged));
+        if (result.examId !== selectedExam) selectExam(result.examId);
+        const lookup = new Map(targetConfig.allQuestions.map((item) => [item.id, item]));
+        syncLocalRecord(targetConfig.storageKey, targetConfig.historyKey, lookup, targetConfig.allQuestions.length);
+        setImportedCsvSession(result);
+        setProgressNotice({
+          tone: "ok",
+          text: `${added ? "Imported" : "Loaded"} ${targetConfig.code} CSV report (${result.summary.correct}/${result.summary.questions}, ${result.summary.percent}%).`,
+        });
+        return;
+      }
+
+      const parsedBackup = parseAndValidateBackup(text);
+      if (!parsedBackup.ok) {
+        setProgressNotice({ tone: "error", text: parsedBackup.error });
+        return;
+      }
+      const mergeResult = applyProgressBackup(parsedBackup.backup, localStorage, { overwriteActiveSessions: false });
+      syncLocalRecord();
+      if (mergeResult.narrationUpdated) {
+        window.dispatchEvent(new Event(PROGRESS_IMPORTED_EVENT));
+      }
+      if (mergeResult.conflictingSessions.length > 0) {
+        setPendingBackup({ backup: parsedBackup.backup, conflicts: mergeResult.conflictingSessions });
+      }
+      const parts = [
+        `${mergeResult.attemptsAdded} new attempt${mergeResult.attemptsAdded === 1 ? "" : "s"}`,
+        `${mergeResult.sessionsRestored} active session${mergeResult.sessionsRestored === 1 ? "" : "s"}`,
+      ];
+      if (mergeResult.narrationUpdated) parts.push("narration settings");
+      const conflictHint = mergeResult.conflictingSessions.length
+        ? ` Existing saved session kept for ${mergeResult.conflictingSessions.map((id) => examConfigs[id].code).join(", ")}.`
+        : "";
+      setProgressNotice({
+        tone: "ok",
+        text: `Imported ${parts.join(", ")}.${conflictHint}`,
+      });
+    } catch {
+      setProgressNotice({ tone: "error", text: "Could not read the selected file." });
+    }
+  }
+
+  function overwriteConflictingSessions() {
+    if (!pendingBackup) return;
+    const mergeResult = applyProgressBackup(pendingBackup.backup, localStorage, { overwriteActiveSessions: true });
+    const overwritten = pendingBackup.conflicts.map((id) => examConfigs[id].code).join(", ");
+    setPendingBackup(null);
+    syncLocalRecord();
+    setProgressNotice({
+      tone: "ok",
+      text: `Restored ${mergeResult.sessionsRestored} active session${mergeResult.sessionsRestored === 1 ? "" : "s"} (replaced saved session for ${overwritten}).`,
+    });
+  }
+
+  function openImportedCsvReport() {
+    if (!importedCsvSession) return;
+    const { examId, questionIds: importedIds, answers: importedAnswers } = importedCsvSession;
+    setSelectedExam(examId);
+    setMode("study");
+    setQuestionIds(importedIds);
+    setAnswers(importedAnswers);
+    setFlagged([]);
+    setChecked([]);
+    setAttemptStartedAt("");
+    setReviewFilter("missed");
+    setScreen("results");
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }
+
   const activeTotalQuestions = selectedExam === "cts" ? TOTAL_QUESTIONS : activeExam.questions.length;
   const activeCramCount = selectedExam === "cts" ? finalCramQuestions.length : activeExam.finalCramQuestions.length;
   const selectedQuestionCount = sessionSize === 75
@@ -859,7 +976,39 @@ export default function Home() {
           </div>
         </section>
         <section className="local-progress" aria-label="Local study progress">
-          <div><p className="eyebrow">Private by design</p><h2>Your local {activeExam.code} study record</h2><p>No account, analytics, or cloud sync. Attempt history and resume data stay in this browser.</p></div>
+          <div>
+            <p className="eyebrow">Private by design</p>
+            <h2>Your local {activeExam.code} study record</h2>
+            <p>No account, analytics, or cloud sync. Attempt history and resume data stay in this browser—export a portable backup to move progress to another device.</p>
+            <div className="progress-actions">
+              <button type="button" className="secondary-btn compact" onClick={exportProgress}>Export progress (.json)</button>
+              <button type="button" className="secondary-btn compact" onClick={() => importInputRef.current?.click()}>Import progress (.json / .csv)</button>
+              <input
+                ref={importInputRef}
+                className="sr-only"
+                type="file"
+                accept=".json,.csv,application/json,text/csv"
+                aria-label="Import progress backup JSON or session CSV file"
+                onChange={handleImportFile}
+              />
+            </div>
+            {progressNotice && (
+              <div className={`progress-feedback ${progressNotice.tone}`} role="status" aria-live="polite">
+                <span>{progressNotice.text}</span>
+                {pendingBackup && (
+                  <div className="progress-feedback-actions">
+                    <button type="button" className="secondary-btn compact" onClick={overwriteConflictingSessions}>Overwrite saved session</button>
+                    <button type="button" className="text-btn" onClick={() => setPendingBackup(null)}>Keep existing</button>
+                  </div>
+                )}
+                {importedCsvSession && (
+                  <div className="progress-feedback-actions">
+                    <button type="button" className="secondary-btn compact" onClick={openImportedCsvReport}>Open report &amp; practice missed</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="progress-stats">
             <span><small>Completed</small><strong>{history.length}</strong><em>saved attempts</em></span>
             <span><small>Best score</small><strong>{bestAttempt === null ? "—" : `${bestAttempt}%`}</strong><em>{bestAttempt === null ? "Complete a session" : "on this device"}</em></span>
