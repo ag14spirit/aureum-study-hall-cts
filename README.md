@@ -59,3 +59,10 @@ npm run dev
 The CTS® questions are original practice items developed from the *CTS Certified Technology Specialist Exam Guide, Third Edition* and checked against the current official outline and primary technical sources. The CTS-I® 300-question mastery bank and 75-question Final Cram collection cover AVIXA's 6-duty installation blueprint (Duties A–F) grounded in the *CTS-I Certified Technology Specialist–Installation Exam Guide, Second Edition*. The CTS-D® 300-question mastery bank and 75-question Final Cram collection cover AVIXA's 4-duty design blueprint (Duties A–D) and AV engineering formulas grounded in the *CTS-D Certified Technology Specialist–Design Exam Guide, Second Edition*. The copyrighted guides themselves and live exam questions are not included.
 
 Independent study material. Not affiliated with, sponsored by, or endorsed by AVIXA. CTS®, CTS-I®, CTS-D®, and AVIXA® are marks of AVIXA, Inc. No practice product can guarantee a pass or predict a live exam.
+
+> [!NOTE]
+>
+> | [AI:X](http://0rwx.com) | AI:X Written by Gemini 4 Carbon, output verified by me. |
+> | ----------------------- | ------------------------------------------------------------------------------------------------ |
+
+[![AI:X EXECUTE](https://img.shields.io/badge/AI-EXECUTE-grey?style=flat&logoSize=auto&labelColor=13171f)](https://0rwx.com)
