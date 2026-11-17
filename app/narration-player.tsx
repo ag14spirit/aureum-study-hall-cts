@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BaseQuestion, ExamId } from "./question-bank";
+import { NARRATION_PREFERENCES_KEY, PROGRESS_IMPORTED_EVENT } from "./progress-backup";
 import {
   getInterfaceNarrationClips,
   interfaceNarrationClips,
@@ -15,8 +16,6 @@ import {
 
 type NarrationContext = "landing" | "exam" | "results";
 type PlaybackState = "idle" | "loading" | "playing" | "paused" | "ended" | "gesture" | "pending" | "error";
-
-const NARRATION_PREFERENCES_KEY = "aureum-study-hall-cts-narration-v1";
 
 function contextClip(context: NarrationContext, question?: BaseQuestion, examId: ExamId = "cts") {
   if (context === "exam" && question) return questionNarrationClip(question, examId);
@@ -62,12 +61,17 @@ export function NarrationPlayer({ context, question, reviewAvailable = false, ex
   const canRead = packReady || speechSupported;
 
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(NARRATION_PREFERENCES_KEY) ?? "{}");
-      setEnabled(Boolean(saved.enabled));
-      setAutoRead(Boolean(saved.autoRead));
-      if ([0.85, 1, 1.15].includes(saved.rate)) setRate(saved.rate);
-    } catch {}
+    const loadPreferences = () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(NARRATION_PREFERENCES_KEY) ?? "{}");
+        setEnabled(Boolean(saved.enabled));
+        setAutoRead(Boolean(saved.autoRead));
+        if ([0.85, 1, 1.15].includes(saved.rate)) setRate(saved.rate);
+      } catch {}
+    };
+    loadPreferences();
+    window.addEventListener(PROGRESS_IMPORTED_EVENT, loadPreferences);
+    return () => window.removeEventListener(PROGRESS_IMPORTED_EVENT, loadPreferences);
   }, []);
 
   useEffect(() => {

@@ -15,7 +15,7 @@
     "preview": "vite preview",
     "export:bank": "tsx scripts/export-question-bank.ts",
     "audit:quality": "npm run export:bank && node scripts/audit-question-quality.mjs",
-    "test": "npm run build && npm run audit:quality && npm run narration:audit && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && npm run audit:quality && npm run narration:audit && node --test tests/rendered-html.test.mjs && tsx --test tests/progress-backup.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

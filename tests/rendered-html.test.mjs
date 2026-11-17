@@ -246,3 +246,23 @@ test("enforces WCAG 2.2 AA accessibility, modal focus trapping, LAN/private-brow
   assert.match(css, /@media \(pointer:coarse\)/, "coarse pointers should use 16px form controls to prevent iOS Safari auto-zoom");
 });
 
+test("supports portable JSON progress backup export/import and CSV session restore", async () => {
+  const [page, css, backup] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+    readFile(new URL("app/progress-backup.ts", root), "utf8"),
+  ]);
+
+  assert.match(page, /Export progress \(\.json\)/);
+  assert.match(page, /Import progress \(\.json \/ \.csv\)/);
+  assert.match(page, /accept="\.json,\.csv,application\/json,text\/csv"/);
+  assert.match(page, /Open report &amp; practice missed/);
+  assert.match(page, /Overwrite saved session/);
+  assert.match(css, /\.progress-actions/);
+  assert.match(css, /\.progress-feedback/);
+  assert.match(backup, /export function buildProgressBackup/);
+  assert.match(backup, /export function parseAndValidateBackup/);
+  assert.match(backup, /export function applyProgressBackup/);
+  assert.match(backup, /export function parseSessionCsv/);
+});
+
